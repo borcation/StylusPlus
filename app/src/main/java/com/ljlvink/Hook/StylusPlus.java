@@ -14,6 +14,7 @@ public class StylusPlus {
     private static final String TOMATO_NOVEL_PACKAGE = "com.dragon.read";
 
     public StylusPlus(){}
+    public boolean tomatoPageModeEnabled;
     public boolean DownPres=true;
 
     public PointF last_point=new PointF();
@@ -94,8 +95,7 @@ public class StylusPlus {
                     return;
                 }
 
-                String packageName = getTopResumedPackageName();
-                if (!TOMATO_NOVEL_PACKAGE.equals(packageName)) {
+                if (!tomatoPageModeEnabled) {
                     return;
                 }
 
@@ -162,6 +162,21 @@ public class StylusPlus {
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
                 int count =(int)param.args[0];
+
+                if(count==1){
+                    String topPackage=getTopResumedPackageName();
+                    if(TOMATO_NOVEL_PACKAGE.equals(topPackage)){
+                        // 手动触发包名检测：命中番茄时激活翻页映射并阻止飞鼠逻辑。
+                        tomatoPageModeEnabled=true;
+                        setInCtrlMode(false);
+                        XposedHelpers.callMethod(param.thisObject,"fadeLocked",0);
+                        param.setResult(null);
+                        return;
+                    }
+                    // 未命中番茄时关闭翻页映射，保持飞鼠逻辑可用。
+                    tomatoPageModeEnabled=false;
+                }
+
                 if(count==2&&isInCtrlMode){
                     //两次短按，退出控制模式，清除掉笔的画面
                     setInCtrlMode(false);
@@ -180,6 +195,12 @@ public class StylusPlus {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
+                if(tomatoPageModeEnabled){
+                    // 番茄小说翻页模式下吞掉激光键抬起，避免触发飞鼠流程。
+                    DownPres=true;
+                    param.setResult(null);
+                    return;
+                }
                 //判断是否可见
                 Object state=XposedHelpers.getObjectField(param.thisObject,"mLaserState");
                 boolean isVisible =XposedHelpers.getBooleanField(state,"mVisible");
