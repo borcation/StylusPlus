@@ -187,7 +187,7 @@ public class StylusPlus {
                     return;
                 }
 
-                logutil.i("tomato: app remap key " + KeyEvent.keyCodeToString(keyCode)
+                logutil.d("tomato: app remap key " + KeyEvent.keyCodeToString(keyCode)
                         + " -> " + KeyEvent.keyCodeToString(targetKeyCode)
                         + " action=" + actionName(action)
                         + " repeat=" + event.getRepeatCount());
