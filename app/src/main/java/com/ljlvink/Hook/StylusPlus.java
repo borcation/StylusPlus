@@ -1,6 +1,9 @@
 package com.ljlvink.Hook;
 
+import android.content.ComponentName;
 import android.graphics.PointF;
+import android.view.KeyEvent;
+
 import com.ljlvink.utils.logutil;
 import java.util.ArrayList;
 
@@ -8,6 +11,8 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
 
 public class StylusPlus {
+    private static final String TOMATO_NOVEL_PACKAGE = "com.dragon.read";
+
     public StylusPlus(){}
     public boolean DownPres=true;
 
@@ -29,7 +34,80 @@ public class StylusPlus {
         return pointf.x!=0.0f||pointf.y!=0.0f; //考虑到上层可能有导致0的情况
     }
 
+    private String getTopResumedPackageName() {
+        try {
+            Class<?> atmClass = XposedHelpers.findClass("android.app.ActivityTaskManager", null);
+            Object atmService = XposedHelpers.callStaticMethod(atmClass, "getService");
+            if (atmService == null) {
+                return null;
+            }
+            Object rootTaskInfo = XposedHelpers.callMethod(atmService, "getFocusedRootTaskInfo");
+            if (rootTaskInfo == null) {
+                return null;
+            }
+            Object topActivity = XposedHelpers.getObjectField(rootTaskInfo, "topActivity");
+            if (topActivity instanceof ComponentName) {
+                return ((ComponentName) topActivity).getPackageName();
+            }
+        } catch (Throwable ignored) {
+            // Keep original behavior when current app cannot be resolved.
+        }
+        return null;
+    }
+
+    private int mapPageKeyToVolumeKey(int keyCode) {
+        if (keyCode == KeyEvent.KEYCODE_PAGE_UP) {
+            return KeyEvent.KEYCODE_VOLUME_UP;
+        }
+        if (keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
+            return KeyEvent.KEYCODE_VOLUME_DOWN;
+        }
+        return keyCode;
+    }
+
+    private KeyEvent buildRemappedKeyEvent(KeyEvent original, int targetKeyCode) {
+        return new KeyEvent(
+                original.getDownTime(),
+                original.getEventTime(),
+                original.getAction(),
+                targetKeyCode,
+                original.getRepeatCount(),
+                original.getMetaState(),
+                original.getDeviceId(),
+                original.getScanCode(),
+                original.getFlags(),
+                original.getSource()
+        );
+    }
+
     public void Payload(ClassLoader classLoader) throws Throwable {
+        XposedHelpers.findAndHookMethod("com.android.server.policy.PhoneWindowManager", classLoader, "interceptKeyBeforeQueueing", KeyEvent.class, int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                super.beforeHookedMethod(param);
+                KeyEvent event = (KeyEvent) param.args[0];
+                if (event == null) {
+                    return;
+                }
+                int action = event.getAction();
+                if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
+                    return;
+                }
+
+                String packageName = getTopResumedPackageName();
+                if (!TOMATO_NOVEL_PACKAGE.equals(packageName)) {
+                    return;
+                }
+
+                int targetKeyCode = mapPageKeyToVolumeKey(event.getKeyCode());
+                if (targetKeyCode == event.getKeyCode()) {
+                    return;
+                }
+
+                param.args[0] = buildRemappedKeyEvent(event, targetKeyCode);
+            }
+        });
+
         //加载输入
         Class<?>inputSC=XposedHelpers.findClass("com.android.server.input.InputShellCommand",classLoader);
         Object InputShellCommand = inputSC.newInstance();
