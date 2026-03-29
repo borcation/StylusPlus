@@ -1,6 +1,8 @@
 package com.ljlvink.Hook;
 
 import android.graphics.PointF;
+import android.view.KeyEvent;
+
 import com.ljlvink.utils.logutil;
 import java.util.ArrayList;
 
@@ -8,6 +10,8 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
 
 public class StylusPlus {
+    private static final String TOMATO_NOVEL_PACKAGE = "com.dragon.read";
+
     public StylusPlus(){}
     public boolean DownPres=true;
 
@@ -29,18 +33,57 @@ public class StylusPlus {
         return pointf.x!=0.0f||pointf.y!=0.0f; //考虑到上层可能有导致0的情况
     }
 
+    private int mapPageKeyToVolumeKey(int keyCode) {
+        if (keyCode == KeyEvent.KEYCODE_PAGE_UP) {
+            return KeyEvent.KEYCODE_VOLUME_UP;
+        }
+        if (keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
+            return KeyEvent.KEYCODE_VOLUME_DOWN;
+        }
+        return keyCode;
+    }
+
+    private KeyEvent buildRemappedKeyEvent(KeyEvent original, int targetKeyCode) {
+        return new KeyEvent(
+                original.getDownTime(),
+                original.getEventTime(),
+                original.getAction(),
+                targetKeyCode,
+                original.getRepeatCount(),
+                original.getMetaState(),
+                original.getDeviceId(),
+                original.getScanCode(),
+                original.getFlags(),
+                original.getSource()
+        );
+    }
+
+    private String actionName(int action) {
+        if (action == KeyEvent.ACTION_DOWN) {
+            return "DOWN";
+        }
+        if (action == KeyEvent.ACTION_UP) {
+            return "UP";
+        }
+        return String.valueOf(action);
+    }
+
     public void Payload(ClassLoader classLoader) throws Throwable {
+        logutil.refreshDebugFlag();
+        logutil.i("hook init: android process stylus hooks");
+
         //加载输入
         Class<?>inputSC=XposedHelpers.findClass("com.android.server.input.InputShellCommand",classLoader);
         Object InputShellCommand = inputSC.newInstance();
         String stylus="stylus.";
         try{
             XposedHelpers.findClass("com.miui.server.input.stylus.laser.LaserView",classLoader);
-            logutil.log("use com.miui.server.input.stylus.laser.LaserView"); //server.input.stylus (xiaomi Pad 6S Pro)
+            logutil.i("use com.miui.server.input.stylus.laser.LaserView"); //server.input.stylus (xiaomi Pad 6S Pro)
         }catch (XposedHelpers.ClassNotFoundError e){
             stylus="";
-            logutil.log("use com.miui.server.input.laser.LaserView"); //input.stylus (xiaomi Pad 6 Max)
+            logutil.i("use com.miui.server.input.laser.LaserView"); //input.stylus (xiaomi Pad 6 Max)
         }
+        logutil.i("hook init: LaserView/LaserPointerController, stylusPrefix="+stylus);
         XposedHelpers.findAndHookMethod("com.miui.server.input."+stylus+"laser.LaserView", classLoader, "setPosition", android.graphics.PointF.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -84,6 +127,7 @@ public class StylusPlus {
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
                 int count =(int)param.args[0];
+
                 if(count==2&&isInCtrlMode){
                     //两次短按，退出控制模式，清除掉笔的画面
                     setInCtrlMode(false);
@@ -114,6 +158,40 @@ public class StylusPlus {
                     XposedHelpers.callMethod(InputShellCommand,"sendMotionEvent",4098,1,last_point.x,last_point.y,0); //根据最后一个位置发送抬笔事件
                 }
                 DownPres=true; //抬笔,下次点击时要先落笔
+            }
+        });
+    }
+
+    public void PayloadTomato(ClassLoader classLoader) throws Throwable {
+        logutil.refreshDebugFlag();
+        logutil.i("hook init: tomato process key remap");
+        XposedHelpers.findAndHookMethod("android.app.Activity", classLoader, "dispatchKeyEvent", KeyEvent.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                super.beforeHookedMethod(param);
+                KeyEvent event = (KeyEvent) param.args[0];
+                if (event == null) {
+                    return;
+                }
+                int action = event.getAction();
+                if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
+                    return;
+                }
+                int keyCode = event.getKeyCode();
+                if (keyCode != KeyEvent.KEYCODE_PAGE_UP && keyCode != KeyEvent.KEYCODE_PAGE_DOWN) {
+                    return;
+                }
+
+                int targetKeyCode = mapPageKeyToVolumeKey(keyCode);
+                if (targetKeyCode == keyCode) {
+                    return;
+                }
+
+                logutil.d("tomato: app remap key " + KeyEvent.keyCodeToString(keyCode)
+                        + " -> " + KeyEvent.keyCodeToString(targetKeyCode)
+                        + " action=" + actionName(action)
+                        + " repeat=" + event.getRepeatCount());
+                param.args[0] = buildRemappedKeyEvent(event, targetKeyCode);
             }
         });
     }
