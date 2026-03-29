@@ -2,7 +2,7 @@ name: Android CI Build
 
 on:
   push:
-    branches: [ "main", "master" ] # 当你提交代码到主分支时触发
+    branches: [ "main", "master", "borcation-patch-1"] # 当你提交代码到主分支时触发
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch: # 允许你手动点击按钮触发编译
