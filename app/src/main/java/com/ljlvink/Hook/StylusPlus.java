@@ -14,7 +14,6 @@ public class StylusPlus {
     private static final String TOMATO_NOVEL_PACKAGE = "com.dragon.read";
 
     public StylusPlus(){}
-    public boolean tomatoPageModeEnabled;
     public boolean DownPres=true;
 
     public PointF last_point=new PointF();
@@ -93,42 +92,34 @@ public class StylusPlus {
         return String.valueOf(action);
     }
 
-    private String pointString(PointF pointF) {
-        return "(" + pointF.x + "," + pointF.y + ")";
-    }
-
     public void Payload(ClassLoader classLoader) throws Throwable {
         logutil.refreshDebugFlag();
-        logutil.i("hook init: PhoneWindowManager.interceptKeyBeforeQueueing");
-        XposedHelpers.findAndHookMethod("com.android.server.policy.PhoneWindowManager", classLoader, "interceptKeyBeforeQueueing", KeyEvent.class, int.class, new XC_MethodHook() {
+        logutil.i("hook init: PhoneWindowManager.interceptKeyBeforeDispatching");
+        XposedHelpers.findAndHookMethod("com.android.server.policy.PhoneWindowManager", classLoader, "interceptKeyBeforeDispatching", "com.android.server.policy.WindowManagerPolicy$WindowState", KeyEvent.class, int.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
-                KeyEvent event = (KeyEvent) param.args[0];
+                KeyEvent event = (KeyEvent) param.args[1];
                 if (event == null) {
                     return;
                 }
+
                 int action = event.getAction();
                 if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
                     return;
                 }
 
                 int keyCode = event.getKeyCode();
-                if (keyCode == KeyEvent.KEYCODE_PAGE_UP || keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
-                    logutil.d("key intercept: code=" + KeyEvent.keyCodeToString(keyCode)
-                            + " action=" + actionName(action)
-                            + " mode=" + tomatoPageModeEnabled);
-                }
-
-                if (!tomatoPageModeEnabled) {
+                if (keyCode != KeyEvent.KEYCODE_PAGE_UP && keyCode != KeyEvent.KEYCODE_PAGE_DOWN) {
                     return;
                 }
 
                 String topPackage = getTopResumedPackageName();
+                if (action == KeyEvent.ACTION_DOWN) {
+                    logutil.i("tomato: auto detect top package=" + topPackage
+                            + " key=" + KeyEvent.keyCodeToString(keyCode));
+                }
                 if (!TOMATO_NOVEL_PACKAGE.equals(topPackage)) {
-                    if (keyCode == KeyEvent.KEYCODE_PAGE_UP || keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
-                        logutil.d("key skip: mode on but top package is " + topPackage);
-                    }
                     return;
                 }
 
@@ -137,11 +128,11 @@ public class StylusPlus {
                     return;
                 }
 
-                logutil.i("tomato: remap key " + KeyEvent.keyCodeToString(keyCode)
+                logutil.i("tomato: dispatch remap key " + KeyEvent.keyCodeToString(keyCode)
                         + " -> " + KeyEvent.keyCodeToString(targetKeyCode)
                         + " action=" + actionName(action)
                         + " repeat=" + event.getRepeatCount());
-                param.args[0] = buildRemappedKeyEvent(event, targetKeyCode);
+                param.args[1] = buildRemappedKeyEvent(event, targetKeyCode);
             }
         });
 
@@ -200,24 +191,6 @@ public class StylusPlus {
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
                 int count =(int)param.args[0];
-                logutil.d("laser press: count="+count+" drawMode="+isDrawMode+" keepPath="+isKeepPath+" ctrlMode="+isInCtrlMode+" tomatoMode="+tomatoPageModeEnabled+" lastPoint="+pointString(last_point));
-
-                if(count==1){
-                    String topPackage=getTopResumedPackageName();
-                    logutil.i("tomato: laser single press, top package="+topPackage);
-                    if(TOMATO_NOVEL_PACKAGE.equals(topPackage)){
-                        // 手动触发包名检测：命中番茄时激活翻页映射并阻止飞鼠逻辑。
-                        tomatoPageModeEnabled=true;
-                        logutil.i("tomato: page remap mode enabled");
-                        setInCtrlMode(false);
-                        XposedHelpers.callMethod(param.thisObject,"fadeLocked",0);
-                        param.setResult(null);
-                        return;
-                    }
-                    // 未命中番茄时关闭翻页映射，保持飞鼠逻辑可用。
-                    tomatoPageModeEnabled=false;
-                    logutil.i("tomato: page remap mode disabled");
-                }
 
                 if(count==2&&isInCtrlMode){
                     //两次短按，退出控制模式，清除掉笔的画面
@@ -227,7 +200,6 @@ public class StylusPlus {
                 //一次短按，判断最后一个点的合法性发送单击事件
                 if(isDrawMode&&checkPointerVaild(last_point)){
                     PointF lst=last_point;
-                    logutil.d("laser tap inject: point="+pointString(lst));
                     XposedHelpers.callMethod(InputShellCommand,"sendTap",4098,lst.x,lst.y,0);
                     //inject run
                     param.setResult(null);//阻止系统函数处理单击事件
@@ -238,15 +210,6 @@ public class StylusPlus {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
-                String topPackage=getTopResumedPackageName();
-                logutil.d("laser key up: tomatoMode="+tomatoPageModeEnabled+" topPackage="+topPackage+" ctrlMode="+isInCtrlMode+" lastPoint="+pointString(last_point));
-                if(tomatoPageModeEnabled&&TOMATO_NOVEL_PACKAGE.equals(topPackage)){
-                    // 番茄小说翻页模式下吞掉激光键抬起，避免触发飞鼠流程。
-                    DownPres=true;
-                    logutil.i("tomato: consume laser key up in tomato mode");
-                    param.setResult(null);
-                    return;
-                }
                 //判断是否可见
                 Object state=XposedHelpers.getObjectField(param.thisObject,"mLaserState");
                 boolean isVisible =XposedHelpers.getBooleanField(state,"mVisible");
