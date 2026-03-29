@@ -23,7 +23,7 @@ public class HookMain implements IXposedHookLoadPackage {
         if(loadPackageParam.packageName.equals("android")){
             String fingerprint=getprop("ro.build.fingerprint");
             if(fingerprint.contains("liuqin")||fingerprint.contains("pipa")){
-                logutil.log("not support");
+                logutil.w("not support");
                 return;
             }
             new StylusPlus().Payload(classLoader);

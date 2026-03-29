@@ -40,10 +40,12 @@ public class StylusPlus {
             Class<?> atmClass = XposedHelpers.findClass("android.app.ActivityTaskManager", null);
             Object atmService = XposedHelpers.callStaticMethod(atmClass, "getService");
             if (atmService == null) {
+                logutil.w("tomato: ActivityTaskManager service is null");
                 return null;
             }
             Object rootTaskInfo = XposedHelpers.callMethod(atmService, "getFocusedRootTaskInfo");
             if (rootTaskInfo == null) {
+                logutil.w("tomato: focused root task is null");
                 return null;
             }
             Object topActivity = XposedHelpers.getObjectField(rootTaskInfo, "topActivity");
@@ -51,7 +53,7 @@ public class StylusPlus {
                 return ((ComponentName) topActivity).getPackageName();
             }
         } catch (Throwable ignored) {
-            // Keep original behavior when current app cannot be resolved.
+            logutil.e("tomato: resolve top package failed " + ignored);
         }
         return null;
     }
@@ -81,7 +83,23 @@ public class StylusPlus {
         );
     }
 
+    private String actionName(int action) {
+        if (action == KeyEvent.ACTION_DOWN) {
+            return "DOWN";
+        }
+        if (action == KeyEvent.ACTION_UP) {
+            return "UP";
+        }
+        return String.valueOf(action);
+    }
+
+    private String pointString(PointF pointF) {
+        return "(" + pointF.x + "," + pointF.y + ")";
+    }
+
     public void Payload(ClassLoader classLoader) throws Throwable {
+        logutil.refreshDebugFlag();
+        logutil.i("hook init: PhoneWindowManager.interceptKeyBeforeQueueing");
         XposedHelpers.findAndHookMethod("com.android.server.policy.PhoneWindowManager", classLoader, "interceptKeyBeforeQueueing", KeyEvent.class, int.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -95,15 +113,34 @@ public class StylusPlus {
                     return;
                 }
 
+                int keyCode = event.getKeyCode();
+                if (keyCode == KeyEvent.KEYCODE_PAGE_UP || keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
+                    logutil.d("key intercept: code=" + KeyEvent.keyCodeToString(keyCode)
+                            + " action=" + actionName(action)
+                            + " mode=" + tomatoPageModeEnabled);
+                }
+
                 if (!tomatoPageModeEnabled) {
                     return;
                 }
 
-                int targetKeyCode = mapPageKeyToVolumeKey(event.getKeyCode());
-                if (targetKeyCode == event.getKeyCode()) {
+                String topPackage = getTopResumedPackageName();
+                if (!TOMATO_NOVEL_PACKAGE.equals(topPackage)) {
+                    if (keyCode == KeyEvent.KEYCODE_PAGE_UP || keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
+                        logutil.d("key skip: mode on but top package is " + topPackage);
+                    }
                     return;
                 }
 
+                int targetKeyCode = mapPageKeyToVolumeKey(keyCode);
+                if (targetKeyCode == keyCode) {
+                    return;
+                }
+
+                logutil.i("tomato: remap key " + KeyEvent.keyCodeToString(keyCode)
+                        + " -> " + KeyEvent.keyCodeToString(targetKeyCode)
+                        + " action=" + actionName(action)
+                        + " repeat=" + event.getRepeatCount());
                 param.args[0] = buildRemappedKeyEvent(event, targetKeyCode);
             }
         });
@@ -114,11 +151,12 @@ public class StylusPlus {
         String stylus="stylus.";
         try{
             XposedHelpers.findClass("com.miui.server.input.stylus.laser.LaserView",classLoader);
-            logutil.log("use com.miui.server.input.stylus.laser.LaserView"); //server.input.stylus (xiaomi Pad 6S Pro)
+            logutil.i("use com.miui.server.input.stylus.laser.LaserView"); //server.input.stylus (xiaomi Pad 6S Pro)
         }catch (XposedHelpers.ClassNotFoundError e){
             stylus="";
-            logutil.log("use com.miui.server.input.laser.LaserView"); //input.stylus (xiaomi Pad 6 Max)
+            logutil.i("use com.miui.server.input.laser.LaserView"); //input.stylus (xiaomi Pad 6 Max)
         }
+        logutil.i("hook init: LaserView/LaserPointerController, stylusPrefix="+stylus);
         XposedHelpers.findAndHookMethod("com.miui.server.input."+stylus+"laser.LaserView", classLoader, "setPosition", android.graphics.PointF.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -162,12 +200,15 @@ public class StylusPlus {
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
                 int count =(int)param.args[0];
+                logutil.d("laser press: count="+count+" drawMode="+isDrawMode+" keepPath="+isKeepPath+" ctrlMode="+isInCtrlMode+" tomatoMode="+tomatoPageModeEnabled+" lastPoint="+pointString(last_point));
 
                 if(count==1){
                     String topPackage=getTopResumedPackageName();
+                    logutil.i("tomato: laser single press, top package="+topPackage);
                     if(TOMATO_NOVEL_PACKAGE.equals(topPackage)){
                         // 手动触发包名检测：命中番茄时激活翻页映射并阻止飞鼠逻辑。
                         tomatoPageModeEnabled=true;
+                        logutil.i("tomato: page remap mode enabled");
                         setInCtrlMode(false);
                         XposedHelpers.callMethod(param.thisObject,"fadeLocked",0);
                         param.setResult(null);
@@ -175,6 +216,7 @@ public class StylusPlus {
                     }
                     // 未命中番茄时关闭翻页映射，保持飞鼠逻辑可用。
                     tomatoPageModeEnabled=false;
+                    logutil.i("tomato: page remap mode disabled");
                 }
 
                 if(count==2&&isInCtrlMode){
@@ -185,6 +227,7 @@ public class StylusPlus {
                 //一次短按，判断最后一个点的合法性发送单击事件
                 if(isDrawMode&&checkPointerVaild(last_point)){
                     PointF lst=last_point;
+                    logutil.d("laser tap inject: point="+pointString(lst));
                     XposedHelpers.callMethod(InputShellCommand,"sendTap",4098,lst.x,lst.y,0);
                     //inject run
                     param.setResult(null);//阻止系统函数处理单击事件
@@ -195,9 +238,12 @@ public class StylusPlus {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
-                if(tomatoPageModeEnabled){
+                String topPackage=getTopResumedPackageName();
+                logutil.d("laser key up: tomatoMode="+tomatoPageModeEnabled+" topPackage="+topPackage+" ctrlMode="+isInCtrlMode+" lastPoint="+pointString(last_point));
+                if(tomatoPageModeEnabled&&TOMATO_NOVEL_PACKAGE.equals(topPackage)){
                     // 番茄小说翻页模式下吞掉激光键抬起，避免触发飞鼠流程。
                     DownPres=true;
+                    logutil.i("tomato: consume laser key up in tomato mode");
                     param.setResult(null);
                     return;
                 }
